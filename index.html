@@ -29,8 +29,8 @@
     // -- Configuration --
     const MAPBOX_TOKEN = 'pk.eyJ1IjoiZXotcGFyayIsImEiOiJjbWEyczBsZWcwamNvMm5va3Qwa2kyZTZ6In0.kP-KWRg12p0A6MsetfjibQ';
     const COORD_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSEG7vxc13zZuw9_Wrp5tgTH9_tSwBMBEwiy4rZFSsi9vL9qs-9pNvYLOm4lx_1Lk9RC6HSuT_5VNE0/pub?gid=0&single=true&output=csv';
-    const STATUS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ8gvbP_bQNl3zY89jZNHG3L-5EvDszmpVZTQeUYL3NFPHVyKHAWjhEF1HdiTVHm-IvFQ0T1eXaOcLj/pub?output=csv';
-    const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbx1oiHErJFrSR2juag9WCfyB0EyWae5C3vMiBnlwY1yv8hY29J2YCvCPnlXORP-YWAk/exec';
+    const STATUS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ8gvbP_bQNl3zZ89jZNHG3L-5EvDszmpVZTQeUYL3NFPHVyKHAWjhEF1HdiTVHm-IvFQ0T1eXaOcLj/pub?output=csv';
+    const WEBHOOK_URL  = 'https://script.google.com/macros/s/AKfycbx1oiHErJFrSR2juag9WCfyB0EyWae5C3vMiBnlwY1yv8hY29J2YCvCPnlXORP-YWAk/exec';
     const EDIT_PASSWORD = 'Jcapable';
     const REFRESH_INTERVAL_MS = 10000;
 
@@ -59,17 +59,14 @@
       }
     }
 
-    // Show/hide loading
     function showLoading(show) {
       document.getElementById('loading').style.display = show ? 'block' : 'none';
     }
 
-    // CSV parsing helper
     function parseCSV(text) {
       return text.trim().split(/\r?\n/).map(line => line.split(',').map(cell => cell.trim()));
     }
 
-    // Fetch and build status map
     async function fetchStatusMap() {
       const res = await fetch(STATUS_CSV_URL);
       const txt = await res.text();
@@ -81,7 +78,6 @@
       return map;
     }
 
-    // Fetch coordinates list
     async function fetchCoords() {
       const res = await fetch(COORD_CSV_URL);
       const txt = await res.text();
@@ -89,20 +85,15 @@
       return rows.map(r => ({ name: r[0], lat: parseFloat(r[1]), lng: parseFloat(r[2]) }));
     }
 
-    // Load and display map markers
     async function loadMapData() {
       try {
         showLoading(true);
         const [statusMap, coords] = await Promise.all([fetchStatusMap(), fetchCoords()]);
-
-        // Remove existing markers and route
         document.querySelectorAll('.marker').forEach(m => m.remove());
         if (map.getLayer(routeLayerId)) {
           map.removeLayer(routeLayerId);
           map.removeSource(routeLayerId);
         }
-
-        // Add markers
         coords.forEach(({ name, lat, lng }) => {
           const status = statusMap[name] || 'Unknown';
           const color = status.toLowerCase() === 'free' ? 'green'
@@ -114,12 +105,12 @@
           el.style.width = '16px';
           el.style.height = '16px';
           el.style.borderRadius = '50%';
-
-          const marker = new mapboxgl.Marker(el)
+          new mapboxgl.Marker(el)
             .setLngLat([lng, lat])
             .setPopup(new mapboxgl.Popup({ offset: 25 })
               .setHTML(`<strong>${name}</strong><br>Status: ${status}<br>
-                <button onclick="routeTo(${lat},${lng})">Route</button> <a href=\"https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}\" target=\"_blank\">Google Maps</a>`))
+                <button onclick="routeTo(${lat},${lng})">Route</button>
+                <a href=\"https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}\" target=\"_blank\">Google Maps</a>`))
             .addTo(map);
         });
       } catch (err) {
@@ -129,7 +120,6 @@
       }
     }
 
-    // Route drawing
     window.routeTo = async function(lat, lng) {
       if (!userMarker) return alert('Waiting for location...');
       const [userLng, userLat] = userMarker.getLngLat().toArray();
@@ -145,7 +135,6 @@
       map.addLayer({ id: routeLayerId, type:'line', source: routeLayerId, layout:{}, paint:{ 'line-color':'#0074D9','line-width':4 } });
     };
 
-    // Geolocation
     navigator.geolocation.watchPosition(pos => {
       const { longitude: lng, latitude: lat } = pos.coords;
       if (!userMarker) {
@@ -154,9 +143,8 @@
       } else {
         userMarker.setLngLat([lng, lat]);
       }
-    }, err => console.warn('Geolocation error:', err));
+    });
 
-    // Editor interactions
     if (editorMode) {
       map.on('click', e => {
         lastClickLngLat = e.lngLat;
@@ -165,23 +153,26 @@
       document.getElementById('save-spot-btn').addEventListener('click', async () => {
         const name = document.getElementById('new-spot-name').value.trim();
         if (!name || !lastClickLngLat) return alert('Enter name and click the map.');
-        const payload = { name, lat: lastClickLngLat.lat.toFixed(6), lng: lastClickLngLat.lng.toFixed(6) };
-        const res = await fetch(WEBHOOK_URL, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) });
-        if (res.ok) {
-          alert('✅ Spot saved.');
+        const url = `${WEBHOOK_URL}?name=${encodeURIComponent(name)}` +
+                    `&lat=${lastClickLngLat.lat.toFixed(6)}` +
+                    `&lng=${lastClickLngLat.lng.toFixed(6)}`;
+        try {
+          await fetch(url);
+          alert('✅ Spot saved to sheet!');
           document.getElementById('editor').style.display = 'none';
           document.getElementById('new-spot-name').value = '';
           loadMapData();
-        } else {
-          alert('❌ Save failed.');
+        } catch (err) {
+          console.error('Save error:', err);
+          alert('❌ Error saving spot. See console.');
         }
       });
     }
 
-    // Initial load & auto-refresh
     map.on('load', loadMapData);
     setInterval(loadMapData, REFRESH_INTERVAL_MS);
   })();
   </script>
 </body>
 </html>
+
