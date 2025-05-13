@@ -26,26 +26,26 @@
 
   <script>
   (async function() {
-    // -- Configuration --
+    // Configuration
     const MAPBOX_TOKEN = 'pk.eyJ1IjoiZXotcGFyayIsImEiOiJjbWEyczBsZWcwamNvMm5va3Qwa2kyZTZ6In0.kP-KWRg12p0A6MsetfjibQ';
-    const COORD_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSEG7vxc13zZuw9_Wrp5tgTH9_tSwBMBEwiy4rZFSsi9vL9qs-9pNvYLOm4lx_1Lk9RC6HSuT_5VNE0/pub?gid=0&single=true&output=csv';
-    const STATUS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ8gvbP_bQNl3zY89jZNHG3L-5EvDszmpVZTQeUYL3NFPHVyKHAWjhEF1HdiTVHm-IvFQ0T1eXaOcLj/pub?output=csv';
+    const COORD_CSV_URL  = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSEG7vxc13zZuw9_Wrp5tgTH9_tSwBMBEwiy4rZFSsi9vL9qs-9pNvYLOm4lx_1Lk9RC6HSuT_5VNE0/pub?single=true&output=csv';
+    const STATUS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ8gvbP_bQNl3zZNHG3L-5EvDszmpVZTQeUYL3NFPHVyKHAWjhEF1HdiTVHm-IvFQ0T1eXaOcLj/pub?single=true&output=csv';
     const WEBHOOK_URL    = 'https://script.google.com/macros/s/AKfycbx1oiHErJFrSR2juag9WCfyB0EyWae5C3vMiBnlwY1yv8hY29J2YCvCPnlXORP-YWAk/exec';
     const EDIT_PASSWORD  = 'Jcapable';
     const REFRESH_INTERVAL_MS = 10000;
 
-    // -- Map Initialization --
+    // Initialize Map
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
       container: 'map', style: 'mapbox://styles/mapbox/streets-v12', center: [-74.006, 40.7128], zoom: 16
     });
 
-    let userMarker      = null;
-    let routeLayerId    = 'route-layer';
-    let editorMode      = false;
+    let userMarker = null;
+    let routeLayerId = 'route-layer';
+    let editorMode = false;
     let lastClickLngLat = null;
 
-    // Editor toggle
+    // Editor Mode Toggle
     if (window.location.search.includes('setup=1')) {
       const pw = prompt('Enter editor password:');
       if (pw === EDIT_PASSWORD) {
@@ -58,95 +58,125 @@
 
     const showLoading = show => document.getElementById('loading').style.display = show ? 'block' : 'none';
 
-    const parseCSV = text => text.trim().split(/\r?\n/).map(line => line.split(',').map(c=>c.trim()));
+    const parseCSV = text => text.trim().split(/\r?\n/).map(line => line.split(',').map(c => c.trim()));
 
+    // Fetch status map with error fallback
     async function fetchStatusMap() {
-      const res = await fetch(STATUS_CSV_URL);
-      const txt = await res.text();
-      const [headers, ...rest] = parseCSV(txt);
-      const statuses = rest[0]||[];
-      return headers.reduce((m,h,i)=> (m[h]=statuses[i]||'Unknown',m), {});
+      try {
+        const res = await fetch(STATUS_CSV_URL);
+        const txt = await res.text();
+        const rows = parseCSV(txt);
+        const headers = rows[0] || [];
+        const values = rows[1] || [];
+        return headers.reduce((m, h, i) => (m[h] = values[i] || 'Unknown', m), {});
+      } catch (e) {
+        console.error('Status map fetch error:', e);
+        return {};
+      }
     }
 
+    // Fetch coordinates with robust filtering
     async function fetchCoords() {
-      const res = await fetch(COORD_CSV_URL);
-      const txt = await res.text();
-      return parseCSV(txt).slice(1)
-              .filter(r => r.length>=3 && r[1]!=='' && r[2]!=='')
-              .map(r => ({ name:r[0], lat:parseFloat(r[1]), lng:parseFloat(r[2]) }));
+      try {
+        const res = await fetch(COORD_CSV_URL);
+        const txt = await res.text();
+        const rows = parseCSV(txt).slice(1);
+        return rows.reduce((arr, r) => {
+          const [name, latStr, lngStr] = r;
+          const lat = parseFloat(latStr);
+          const lng = parseFloat(lngStr);
+          if (name && !isNaN(lat) && !isNaN(lng)) arr.push({ name, lat, lng });
+          return arr;
+        }, []);
+      } catch (e) {
+        console.error('Coords fetch error:', e);
+        return [];
+      }
     }
 
+    // Load and render spots
     async function loadMapData() {
       showLoading(true);
+      const [statusMap, coords] = await Promise.all([fetchStatusMap(), fetchCoords()]);
+      document.querySelectorAll('.marker').forEach(el => el.remove());
+      if (map.getLayer(routeLayerId)) {
+        map.removeLayer(routeLayerId);
+        map.removeSource(routeLayerId);
+      }
+      coords.forEach(({ name, lat, lng }) => {
+        const status = statusMap[name] || 'Unknown';
+        const color = status.toLowerCase() === 'free' ? 'green' : status.toLowerCase() === 'occupied' ? 'red' : 'gray';
+        const el = document.createElement('div');
+        Object.assign(el.style, { background: color, width: '16px', height: '16px', borderRadius: '50%' });
+        new mapboxgl.Marker(el)
+          .setLngLat([lng, lat])
+          .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(
+            `<strong>${name}</strong><br>Status: ${status}<br>` +
+            `<button onclick="routeTo(${lat},${lng})">Route</button> ` +
+            `<a href=\"https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}\" target=\"_blank\">Google Maps</a>`
+          ))
+          .addTo(map);
+      });
+      showLoading(false);
+    }
+
+    // In-app routing
+    window.routeTo = async (lat, lng) => {
+      if (!userMarker) return alert('Waiting for location...');
+      const [userLng, userLat] = userMarker.getLngLat().toArray();
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${userLng},${userLat};${lng},${lat}?geometries=geojson&access_token=${MAPBOX_TOKEN}`;
       try {
-        const [statusMap, coords] = await Promise.all([fetchStatusMap(), fetchCoords()]);
-        document.querySelectorAll('.marker').forEach(m=>m.remove());
+        const res = await fetch(url);
+        const data = await res.json();
+        const route = data.routes[0].geometry;
         if (map.getLayer(routeLayerId)) {
           map.removeLayer(routeLayerId);
           map.removeSource(routeLayerId);
         }
-        coords.forEach(({name,lat,lng})=>{
-          const status = statusMap[name]||'Unknown';
-          const color = status.toLowerCase()==='free'? 'green'
-                       : status.toLowerCase()==='occupied'? 'red'
-                       : 'gray';
-          const el = document.createElement('div');
-          Object.assign(el.style,{background:color,width:'16px',height:'16px',borderRadius:'50%'});
-          new mapboxgl.Marker(el).setLngLat([lng,lat])
-            .setPopup(new mapboxgl.Popup({offset:25}).setHTML(
-              `<strong>${name}</strong><br>Status: ${status}<br>`+
-              `<button onclick="routeTo(${lat},${lng})">Route</button> `+
-              `<a href=\"https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}\" target=\"_blank\">Google Maps</a>`))
-            .addTo(map);
-        });
-      } catch(err) {
-        console.error('Error loading map:',err);
-      } finally { showLoading(false); }
-    }
-
-    window.routeTo = async(lat,lng)=>{
-      if(!userMarker) return alert('Waiting for location...');
-      const [userLng,userLat] = userMarker.getLngLat().toArray();
-      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${userLng},${userLat};${lng},${lat}`+
-                  `?geometries=geojson&access_token=${MAPBOX_TOKEN}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      const route = data.routes[0].geometry;
-      if(map.getLayer(routeLayerId)){
-        map.removeLayer(routeLayerId);
-        map.removeSource(routeLayerId);
+        map.addSource(routeLayerId, { type: 'geojson', data: route });
+        map.addLayer({ id: routeLayerId, type: 'line', source: routeLayerId, paint: { 'line-color': '#0074D9', 'line-width': 4 } });
+      } catch (e) {
+        console.error('Routing error:', e);
       }
-      map.addSource(routeLayerId,{type:'geojson',data:route});
-      map.addLayer({id:routeLayerId,type:'line',source:routeLayerId,paint:{'line-color':'#0074D9','line-width':4}});
     };
 
-    navigator.geolocation.watchPosition(pos=>{
-      const {longitude:lng,latitude:lat}=pos.coords;
-      if(!userMarker){ userMarker=new mapboxgl.Marker({color:'blue'}).setLngLat([lng,lat]).addTo(map); map.setCenter([lng,lat]); }
-      else userMarker.setLngLat([lng,lat]);
+    // Track user's location
+    navigator.geolocation.watchPosition(pos => {
+      const { longitude: lng, latitude: lat } = pos.coords;
+      if (!userMarker) {
+        userMarker = new mapboxgl.Marker({ color: 'blue' }).setLngLat([lng, lat]).addTo(map);
+        map.setCenter([lng, lat]);
+      } else {
+        userMarker.setLngLat([lng, lat]);
+      }
     });
 
-    if(editorMode){
-      map.on('click',e=>{ lastClickLngLat=e.lngLat; document.getElementById('editor').style.display='block'; });
-      document.getElementById('save-spot-btn').onclick = ()=>{
+    // Editor interactions
+    if (editorMode) {
+      map.on('click', e => {
+        lastClickLngLat = e.lngLat;
+        document.getElementById('editor').style.display = 'block';
+      });
+      document.getElementById('save-spot-btn').onclick = () => {
         const name = document.getElementById('new-spot-name').value.trim();
-        if(!name||!lastClickLngLat) return alert('Enter name and click the map.');
-        const url = `${WEBHOOK_URL}?name=${encodeURIComponent(name)}`+
-                    `&lat=${lastClickLngLat.lat.toFixed(6)}`+
+        if (!name || !lastClickLngLat) return alert('Enter a name and click the map.');
+        const url = `${WEBHOOK_URL}?name=${encodeURIComponent(name)}` +
+                    `&lat=${lastClickLngLat.lat.toFixed(6)}` +
                     `&lng=${lastClickLngLat.lng.toFixed(6)}`;
-        // send via image beacon to avoid CORS
+        // Use image beacon to avoid CORS issues
         const img = new Image();
         img.src = url;
-        img.onload = ()=>{
+        img.onload = () => {
           alert('✅ Spot saved to sheet!');
-          document.getElementById('editor').style.display='none';
-          document.getElementById('new-spot-name').value='';
+          document.getElementById('editor').style.display = 'none';
+          document.getElementById('new-spot-name').value = '';
           loadMapData();
         };
-        img.onerror = ()=> alert('❌ Error saving spot.');
+        img.onerror = () => alert('❌ Error saving spot.');
       };
     }
 
+    // Initial load & auto-refresh
     map.on('load', loadMapData);
     setInterval(loadMapData, REFRESH_INTERVAL_MS);
   })();
