@@ -27,8 +27,8 @@
   (async function() {
     // Configuration
     const MAPBOX_TOKEN  = 'pk.eyJ1IjoiZXotcGFyayIsImEiOiJjbWEyczBsZWcwamNvMm5va3Qwa2kyZTZ6In0.kP-KWRg12p0A6MsetfjibQ';
-    const COORD_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSEG7vxc13zZuw9_Wrp5tgTH9_tSwBMBEwiy4rZFSsi9vL9qs-9pNvYLOm4lx_1Lk9RC6HSuT_5VNE0/pub?gid=0&single=true&output=csv';
-    const STATUS_CSV_URL= 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ8gvbP_bQNl3zZNHG3L-5EvDszmpVZTQeUYL3NFPHVyKHAWjhEF1HdiTVHm-IvFQ0T1eXaOcLj/pub?gid=0&single=true&output=csv';
+    const COORD_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSEG7vxc13zZuw9_Wrp5tgTH9_tSwBMBEwiy4rZFSsi9vL9qs-9pNvYLOm4lx_1Lk9RC6HSuT_5VNE0/pub?output=csv';
+    const STATUS_CSV_URL= 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ8gvbP_bQNl3zZNHG3L-5EvDszmpVZTQeUYL3NFPHVyKHAWjhEF1HdiTVHm-IvFQ0T1eXaOcLj/pub?output=csv';
     const WEBHOOK_URL   = 'https://script.google.com/macros/s/AKfycbx1oiHErJFrSR2juag9WCfyB0EyWae5C3vMiBnlwY1yv8hY29J2YCvCPnlXORP-YWAk/exec';
     const EDIT_PASSWORD = 'Jcapable';
     const REFRESH_MS    = 10000;
@@ -39,86 +39,88 @@
     let userMarker=null, lastClick=null, editorMode=false;
 
     // Editor mode toggle
-    if(location.search.includes('setup=1')){
+    if (location.search.includes('setup=1')) {
       const pw = prompt('Enter editor password:');
-      if(pw === EDIT_PASSWORD){ editorMode = true; alert('Editor mode enabled'); }
+      if (pw === EDIT_PASSWORD) { editorMode = true; alert('Editor mode enabled'); }
       else { alert('Wrong password'); }
     }
 
     const showLoading = show => document.getElementById('loading').style.display = show ? 'block' : 'none';
-    const parseCSV = txt => txt.trim().split(/\r?\n/).map(r => r.split(',').map(c => c.trim()));
+    const parseCSV    = txt => txt.trim().split(/\r?\n/).map(r => r.split(',').map(c => c.trim()));
 
     // Fetch status map
-    async function fetchStatus(){
-      try{
+    async function fetchStatus() {
+      try {
         const txt = await (await fetch(STATUS_CSV_URL)).text();
         const rows = parseCSV(txt);
         const headers = rows[0] || [];
-        const values = rows[1] || [];
+        const values  = rows[1] || [];
         return headers.reduce((map, h, i) => { map[h] = values[i] || 'Unknown'; return map; }, {});
-      } catch(e) {
+      } catch (e) {
         console.error('Status fetch error:', e);
         return {};
       }
     }
 
     // Fetch coordinates
-    async function fetchCoords(){
-      try{
+    async function fetchCoords() {
+      try {
         const txt = await (await fetch(COORD_CSV_URL)).text();
         const rows = parseCSV(txt).slice(1);
         return rows.map(r => ({ name: r[0], lat: parseFloat(r[1]), lng: parseFloat(r[2]) }))
                    .filter(o => o.name && !isNaN(o.lat) && !isNaN(o.lng));
-      } catch(e) {
+      } catch (e) {
         console.error('Coords fetch error:', e);
         return [];
       }
     }
 
     // Load map data
-    async function load(){
+    async function loadMapData() {
       showLoading(true);
       const [statusMap, coords] = await Promise.all([fetchStatus(), fetchCoords()]);
-      // Clear existing markers
       document.querySelectorAll('.marker').forEach(el => el.remove());
       coords.forEach(({name, lat, lng}) => {
         const status = statusMap[name] || 'Unknown';
-        const color = status.toLowerCase() === 'free' ? 'green' : status.toLowerCase() === 'occupied' ? 'red' : 'gray';
+        const color  = status.toLowerCase() === 'free' ? 'green' : status.toLowerCase() === 'occupied' ? 'red' : 'gray';
         const el = document.createElement('div');
         Object.assign(el.style, { background: color, width: '16px', height: '16px', borderRadius: '50%' });
         new mapboxgl.Marker(el)
           .setLngLat([lng, lat])
-          .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(
-            `<strong>${name}</strong><br>Status: ${status}<br>` +
-            `<button onclick="route(${lat},${lng})">Route</button> ` +
-            `<a href=\"https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}\" target=\"_blank\">Google Maps</a>`
-          ))
+          .setPopup(
+            new mapboxgl.Popup({ offset: 25 }).setHTML(
+              `<strong>${name}</strong><br>Status: ${status}<br>` +
+              `<button onclick="routeTo(${lat},${lng})">Route</button> ` +
+              `<a href=\"https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}\" target=\"_blank\">Google Maps</a>`
+            )
+          )
           .addTo(map);
       });
       showLoading(false);
     }
 
-    // In-app route
-    window.route = async (lat, lng) => {
-      if(!userMarker) return alert('Waiting on location');
+    // In-app routing
+    window.routeTo = async (lat, lng) => {
+      if (!userMarker) return alert('Waiting for location');
       const [uLng, uLat] = userMarker.getLngLat().toArray();
-      try{
+      try {
         const res = await fetch(
           `https://api.mapbox.com/directions/v5/mapbox/driving/${uLng},${uLat};${lng},${lat}?geometries=geojson&access_token=${MAPBOX_TOKEN}`
         );
-        const geom = (await res.json()).routes[0].geometry;
-        if(map.getLayer('route')){ map.removeLayer('route'); map.removeSource('route'); }
+        const data = await res.json();
+        const geom = data.routes[0].geometry;
+        if (map.getLayer('route')) { map.removeLayer('route'); map.removeSource('route'); }
         map.addSource('route', { type: 'geojson', data: geom });
         map.addLayer({ id: 'route', type: 'line', source: 'route', paint: { 'line-color': '#0074D9', 'line-width': 4 } });
-      } catch(e) {
-        console.error('Route error:', e);
+      } catch (e) {
+        console.error('Routing error:', e);
       }
     };
 
     // Track user location
     navigator.geolocation.watchPosition(pos => {
       const { longitude: lng, latitude: lat } = pos.coords;
-      if(!userMarker){
+      if (!userMarker) {
         userMarker = new mapboxgl.Marker({ color: 'blue' }).setLngLat([lng, lat]).addTo(map);
         map.setCenter([lng, lat]);
       } else {
@@ -127,22 +129,22 @@
     });
 
     // Editor save
-    if(editorMode){
+    if (editorMode) {
       map.on('click', e => { lastClick = e.lngLat; document.getElementById('editor').style.display = 'block'; });
       document.getElementById('save-spot-btn').onclick = () => {
         const name = document.getElementById('new-spot-name').value.trim();
-        if(!name || !lastClick) return alert('Enter name and click map');
+        if (!name || !lastClick) return alert('Enter a name and click the map');
         const url = `${WEBHOOK_URL}?name=${encodeURIComponent(name)}` +
                     `&lat=${lastClick.lat.toFixed(6)}` +
                     `&lng=${lastClick.lng.toFixed(6)}`;
         fetch(url, { mode: 'no-cors' })
-          .then(() => { alert('Spot saved!'); document.getElementById('editor').style.display='none'; document.getElementById('new-spot-name').value=''; load(); })
+          .then(() => { alert('Spot saved!'); document.getElementById('editor').style.display='none'; document.getElementById('new-spot-name').value=''; loadMapData(); })
           .catch(e => { console.error('Save error:', e); alert('Error saving spot'); });
       };
     }
 
-    map.on('load', load);
-    setInterval(load, REFRESH_MS);
+    map.on('load', loadMapData);
+    setInterval(loadMapData, REFRESH_MS);
   })();
   </script>
 </body>
